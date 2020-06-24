@@ -151,7 +151,7 @@ def degree_statistics(input_list):
 
 def quant_based_degree(embedding_mat, edge_list):
     degree_aware = False
-    bit = 16
+    bit = 2
     if degree_aware:
         degree = defaultdict(int)
         for src, trg in zip(edge_list[0], edge_list[1]):
