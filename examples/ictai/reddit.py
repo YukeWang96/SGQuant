@@ -7,8 +7,15 @@ from torch_geometric.datasets import Reddit
 from torch_geometric.data import NeighborSampler
 from torch_geometric.nn import SAGEConv, GATConv, GCNConv
 
+
+from topo_quant import *
+freq = 5
+epoch_num = 200
+# train_prec = 0.6
+# val_prec = 0.9
+
 epo_num = 1
-GCN = False
+GCN = True
 hidden = 16
 head = 8
 
@@ -32,19 +39,12 @@ class SAGE(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
         # self.convs.append(SAGEConv(in_channels, hidden_channels))
         # self.convs.append(SAGEConv(hidden_channels, out_channels))
-
         if GCN:
             self.convs.append(GCNConv(in_channels, hidden, normalize=True))
             self.convs.append(GCNConv(hidden, out_channels, normalize=True))
         else:
             self.convs.append(GATConv(in_channels, hidden, heads=head, dropout=0.6))
             self.convs.append(GATConv(hidden * head, out_channels, heads=1, concat=True, dropout=0.6))
-
-        # x = F.dropout(data.x, p=0.6, training=self.training)
-        # x = F.elu(self.conv1(x, data.edge_index))
-        # x = F.dropout(x, p=0.6, training=self.training)
-        # x = self.conv2(x, data.edge_index)
-        # return F.log_softmax(x, dim=1)
 
     def forward(self, x, adjs):
         # `train_loader` computes the k-hop neighborhood of a batch of nodes,
@@ -75,7 +75,7 @@ class SAGE(torch.nn.Module):
                     x = F.dropout(x, p=0.6, training=self.training)
         return x.log_softmax(dim=-1)
 
-    def inference(self, x_all):
+    def inference(self, x_all, quant=False):
         pbar = tqdm(total=x_all.size(0) * self.num_layers)
         pbar.set_description('Evaluating')
 
@@ -89,6 +89,9 @@ class SAGE(torch.nn.Module):
                 x = x_all[n_id].to(device)
                 # x_target = x[:size[1]]
                 # x = self.convs[i]((x, x_target), edge_index)
+                if quant:
+                    x = quant_based_degree(x, edge_index)
+
                 x = self.convs[i](x, edge_index)
                 if i != self.num_layers - 1:
                     x = F.relu(x)
@@ -149,10 +152,10 @@ def train(epoch):
 
 
 @torch.no_grad()
-def test():
+def test(quant=False):
     model.eval()
 
-    out = model.inference(x)
+    out = model.inference(x, quant=quant)
 
     y_true = y.cpu().unsqueeze(-1)
     y_pred = out.argmax(dim=-1, keepdim=True)
@@ -174,4 +177,6 @@ for epoch in range(1, epo_num + 1):
     # print(f'Train: {train_acc:.4f}, Val: {val_acc:.4f}, '
     #       f'Test: {test_acc:.4f}')
     test_acc = test()
-    print(f'Test: {test_acc:.4f}')
+    test_acc_quant = test(quant=True)
+    print(f'Test: {test_acc:.4f}, quant_Test: {test_acc_quant:.4f}')
+    
