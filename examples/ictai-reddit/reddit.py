@@ -10,24 +10,29 @@ from torch.nn import Sequential, Linear, ReLU, BatchNorm1d as BatchNorm
 
 from topo_quant import *
 freq = 5
-epoch_num = 200
 # train_prec = 0.6
 # val_prec = 0.9
 
-epo_num = 1
+epo_num = 6
 GCN = False
-GIN = True
-GAT = False
-hidden = 16
+GIN = False
+GAT = True
+hidden = 128
 head = 8
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '../../', 'data', 'Reddit')
 dataset = Reddit(path)
 data = dataset[0]
 
-train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
-                               sizes=[10, 10, 10, 10, 10], batch_size=64, shuffle=True,
-                               num_workers=16)
+if GIN:
+    train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
+                                sizes=[10, 10, 10, 10, 10], batch_size=64, shuffle=True,
+                                num_workers=16)
+else:
+    train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
+                            sizes=[25, 10], batch_size=1024, shuffle=True,
+                            num_workers=16)
+
 subgraph_loader = NeighborSampler(data.edge_index, node_idx=None, sizes=[-1],
                                   batch_size=1024, shuffle=False,
                                   num_workers=16)
@@ -67,6 +72,7 @@ class SAGE(torch.nn.Module):
             self.lin2 = Linear(hidden_channels, out_channels)
 
         if GAT:
+            self.num_layers = 2
             self.convs.append(GATConv(in_channels, hidden_channels, heads=head, dropout=0.6))
             self.convs.append(GATConv(hidden_channels * head, out_channels, heads=1, concat=True, dropout=0.6))
 
@@ -114,34 +120,49 @@ class SAGE(torch.nn.Module):
     def inference(self, x_all, quant=False):
         pbar = tqdm(total=x_all.size(0) * self.num_layers)
         pbar.set_description('Evaluating')
+        xs = []
+
 
         # Compute representations of nodes layer by layer, using *all*
         # available edges. This leads to faster computation in contrast to
         # immediately computing the final representations of each batch.
         if GCN or GAT:
-            for i in range(self.num_layers):
-                xs = []
-                for batch_size, n_id, adj in subgraph_loader:
-                    edge_index, _, size = adj.to(device)
-                    x = x_all[n_id].to(device)
-                    # x_target = x[:size[1]]
-                    # x = self.convs[i]((x, x_target), edge_index)
-                    if quant:
-                        x = quant_based_degree(x, edge_index)
+            # for i in range(self.num_layers):
+            #     for batch_size, n_id, adj in subgraph_loader:
+            #         edge_index, _, size = adj.to(device)
+            #         x = x_all[n_id].to(device)
+            #         # x_target = x[:size[1]]
+            #         # x = self.convs[i]((x, x_target), edge_index)
+            #         if quant:
+            #             x = quant_based_degree(x, edge_index)
 
+            #         x = self.convs[i](x, edge_index)
+            #         if i != self.num_layers - 1:
+            #             x = F.relu(x)
+            #         # xs.append(x[:size[1]].cpu())
+            #         xs.append(x.cpu())
+            #         pbar.update(batch_size)
+
+            for batch_size, n_id, adj in subgraph_loader:
+                edge_index, _, size = adj.to(device)
+                x = x_all[n_id].to(device)
+                # x_target = x[:size[1]]
+                # x = self.convs[i]((x, x_target), edge_index)
+                if quant:
+                    x = quant_based_degree(x, edge_index)
+
+                for i in range(self.num_layers):
                     x = self.convs[i](x, edge_index)
                     if i != self.num_layers - 1:
                         x = F.relu(x)
-                    xs.append(x[:size[1]].cpu())
 
-                    pbar.update(batch_size)
-
-                x_all = torch.cat(xs, dim=0)
-
+                xs.append(x.cpu())
+                pbar.update(batch_size * self.num_layers)    
+            
+            # x_all = torch.cat(xs, dim=0)
             pbar.close()
         
         if GIN:
-            xs = []
             for batch_size, n_id, adj in subgraph_loader:
                 edge_index, _, size = adj.to(device)
                 x = x_all[n_id].to(device)
@@ -154,14 +175,15 @@ class SAGE(torch.nn.Module):
                 xs.append(x)
                 pbar.update(batch_size)
 
-            x_all = torch.cat(xs, dim=0)
+            # x_all = torch.cat(xs, dim=0)
             pbar.close()
 
-        return x_all
+        # return x_all
+        return xs
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = SAGE(dataset.num_features, 256, dataset.num_classes)
+model = SAGE(dataset.num_features, hidden, dataset.num_classes)
 model = model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
@@ -209,22 +231,26 @@ def train(epoch):
 def test(quant=False):
     model.eval()
 
-    out = model.inference(x, quant=quant)
-
+    out_list = model.inference(x, quant=quant)
     y_true = y.cpu().unsqueeze(-1)
-    y_pred = out.argmax(dim=-1, keepdim=True)
+    # y_pred = out.argmax(dim=-1, keepdim=True)
 
     results = []
     # for mask in [data.train_mask, data.val_mask, data.test_mask]:
     #     results += [int(y_pred[mask].eq(y_true[mask]).sum()) / int(mask.sum())]
     if GCN or GAT:
+        begin = 0
         for batch_size, n_id, adj in subgraph_loader:
+            out = out_list.pop(0)
+            y_pred = out.argmax(dim=-1, keepdim=True)
             _, _, size = adj.to(device)
-            results.append(int(y_pred[n_id[:size[1]]].eq(y_true[n_id[:size[1]]]).sum()) / batch_size)
+            results.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
     if GIN:
         for batch_size, n_id, adj in subgraph_loader:
+            out = out_list.pop(0)
+            y_pred = out.argmax(dim=-1, keepdim=True)
             _, _, size = adj.to(device)
-            results.append(int(y_pred[n_id].eq(y_true[n_id]).sum()) / batch_size)
+            results.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
 
     return sum(results)/len(results)
 
@@ -236,6 +262,9 @@ for epoch in range(1, epo_num + 1):
     # print(f'Train: {train_acc:.4f}, Val: {val_acc:.4f}, '
     #       f'Test: {test_acc:.4f}')
     test_acc = test()
-    test_acc_quant = test(quant=True)
-    print(f'Test: {test_acc:.4f}, quant_Test: {test_acc_quant:.4f}')
+    print(f'Test: {test_acc:.4f}')
+
+    if epoch != 1 and (epoch - 1) % freq == 0:
+        test_acc_quant = test(quant=True)
+        print(f'Quant_Test: {test_acc_quant:.4f}')
     
