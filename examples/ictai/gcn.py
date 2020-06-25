@@ -33,11 +33,11 @@ parser.add_argument('--use_gdc', action='store_true',
                     help='Use GDC preprocessing.')
 args = parser.parse_args()
 
-dataset = 'Citeseer' # Cora, Citeseer, PubMed
-# dataset = 'computers' # Amazon: computers, photo
+# dataset = 'Citeseer' # Cora, Citeseer, PubMed
+dataset = 'computers' # Amazon: computers, photo
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset)
-dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures())
-# dataset = Amazon(path, dataset)
+# dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures())
+dataset = Amazon(path, dataset)
 data = dataset[0]
 
 if args.use_gdc:
@@ -56,9 +56,6 @@ class Net(torch.nn.Module):
                              normalize=not args.use_gdc)
         self.conv2 = GCNConv(16, dataset.num_classes, cached=True,
                              normalize=not args.use_gdc)
-        # self.conv1 = ChebConv(data.num_features, 16, K=2)
-        # self.conv2 = ChebConv(16, data.num_features, K=2)
-
         self.reg_params = self.conv1.parameters()
         self.non_reg_params = self.conv2.parameters()
 
@@ -83,11 +80,6 @@ optimizer = torch.optim.Adam([
     dict(params=model.non_reg_params, weight_decay=0)
 ], lr=learning_rate)
 
-# train_mask = [False] * len(data.y)
-# for i in range(int(len(data.y) * 0.6)): 
-#     train_mask[i] = True
-# train_mask = torch.BoolTensor(train_mask)
-# train_mask = train_mask.cuda()
 train_mask = [0] * len(data.y)
 for i in range(int(len(data.y) * train_prec)): 
     train_mask[i] = 1
@@ -126,27 +118,7 @@ def test(quant=False):
 
     model.eval()
     logits, accs = model(quant), []
-    # for _, mask in data('train_mask', 'val_mask', 'test_mask'):
-    #     pred = logits[mask].max(1)[1]
-    #     acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
-    #     accs.append(acc)
 
-    # train_mask = [0] * len(data.y)
-    # for i in range(int(len(data.y) * train_prec)): 
-    #     train_mask[i] = 1
-
-    # val_mask = [0] * len(data.y)
-    # for i in range(int(len(data.y) * train_prec), int(len(data.y) * val_prec)):
-    #     val_mask[i] = 1
-
-    # test_mask = [0] * len(data.y)
-    # for i in range(int(len(data.y) * val_prec), int(len(data.y) * 1.0)):
-    #     test_mask[i] = 1
-
-    # train_mask = torch.BoolTensor(train_mask).cuda()
-    # val_mask = torch.BoolTensor(val_mask).cuda()
-    # test_mask = torch.BoolTensor(test_mask).cuda()
-    
     # print(train_mask)
     for mask in [train_mask, val_mask, test_mask]:
         pred = logits[mask].max(1)[1]
