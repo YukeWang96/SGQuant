@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from torch_geometric.datasets import Reddit
 from torch_geometric.data import NeighborSampler
-from torch_geometric.nn import SAGEConv, GATConv, GCNConv
-
+from torch_geometric.nn import SAGEConv, GATConv, GCNConv, GINConv
+from torch.nn import Sequential, Linear, ReLU, BatchNorm1d as BatchNorm
 
 from topo_quant import *
 freq = 5
@@ -15,7 +15,9 @@ epoch_num = 200
 # val_prec = 0.9
 
 epo_num = 1
-GCN = True
+GCN = False
+GIN = True
+GAT = False
 hidden = 16
 head = 8
 
@@ -24,7 +26,7 @@ dataset = Reddit(path)
 data = dataset[0]
 
 train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
-                               sizes=[25, 10], batch_size=1024, shuffle=True,
+                               sizes=[10, 10, 10, 10, 10], batch_size=64, shuffle=True,
                                num_workers=16)
 subgraph_loader = NeighborSampler(data.edge_index, node_idx=None, sizes=[-1],
                                   batch_size=1024, shuffle=False,
@@ -35,16 +37,38 @@ class SAGE(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels):
         super(SAGE, self).__init__()
 
-        self.num_layers = 2
         self.convs = torch.nn.ModuleList()
         # self.convs.append(SAGEConv(in_channels, hidden_channels))
         # self.convs.append(SAGEConv(hidden_channels, out_channels))
         if GCN:
-            self.convs.append(GCNConv(in_channels, hidden, normalize=True))
-            self.convs.append(GCNConv(hidden, out_channels, normalize=True))
-        else:
-            self.convs.append(GATConv(in_channels, hidden, heads=head, dropout=0.6))
-            self.convs.append(GATConv(hidden * head, out_channels, heads=1, concat=True, dropout=0.6))
+            self.num_layers = 2
+            self.convs.append(GCNConv(in_channels, hidden_channels, normalize=True))
+            self.convs.append(GCNConv(hidden_channels, out_channels, normalize=True))
+
+        if GIN:
+            self.num_layers = 5
+            self.batch_norms = torch.nn.ModuleList()
+
+            for i in range(self.num_layers):
+                mlp = Sequential(
+                    Linear(in_channels, 2 * hidden_channels),
+                    BatchNorm(2 * hidden_channels),
+                    ReLU(),
+                    Linear(2 * hidden_channels, hidden_channels),
+                )
+                conv = GINConv(mlp, train_eps=True)
+                self.convs.append(conv)
+                self.batch_norms.append(BatchNorm(hidden_channels))
+
+                in_channels = hidden_channels
+                
+            self.lin1 = Linear(hidden_channels, hidden_channels)
+            self.batch_norm1 = BatchNorm(hidden_channels)
+            self.lin2 = Linear(hidden_channels, out_channels)
+
+        if GAT:
+            self.convs.append(GATConv(in_channels, hidden_channels, heads=head, dropout=0.6))
+            self.convs.append(GATConv(hidden_channels * head, out_channels, heads=1, concat=True, dropout=0.6))
 
     def forward(self, x, adjs):
         # `train_loader` computes the k-hop neighborhood of a batch of nodes,
@@ -58,21 +82,33 @@ class SAGE(torch.nn.Module):
             # print(size)
             # x_target = x[:size[1]]  # Target nodes are always placed first.
             # x = self.convs[i]((x, x_target), edge_index)
-            if  i == 0 and not GCN:
+            if i == 0 and GAT:
                 x = F.dropout(x, p=0.6, training=self.training)
 
-            x = self.convs[i](x, edge_index)
-            # print("x_target.size(): ", x_target.size())
-            # print("x.size(): ", x.size())
-            # print(edge_index)
-            # print(edge_index.size())
+            if GCN or GAT:
+                x = self.convs[i](x, edge_index)
+                # print("x_target.size(): ", x_target.size())
+                # print("x.size(): ", x.size())
+                # print(edge_index)
+                # print(edge_index.size())
 
-            if i != self.num_layers - 1:
-                x = F.relu(x)
-                if GCN:
-                    x = F.dropout(x, training=self.training)
-                else:
-                    x = F.dropout(x, p=0.6, training=self.training)
+                if i != self.num_layers - 1:
+                    x = F.relu(x)
+                    if GCN:
+                        x = F.dropout(x, training=self.training)
+                    else:
+                        x = F.dropout(x, p=0.6, training=self.training)
+            if GIN:
+                x = self.convs[i](x, edge_index)
+                if i != self.num_layers - 1:
+                    x = F.relu(self.batch_norms[i](x))
+
+        if GIN:
+            # x = global_add_pool(x, batch)
+            x = F.relu(self.batch_norm1(self.lin1(x)))
+            x = F.dropout(x, p=0.5, training=self.training)
+            x = self.lin2(x)
+
         return x.log_softmax(dim=-1)
 
     def inference(self, x_all, quant=False):
@@ -82,26 +118,44 @@ class SAGE(torch.nn.Module):
         # Compute representations of nodes layer by layer, using *all*
         # available edges. This leads to faster computation in contrast to
         # immediately computing the final representations of each batch.
-        for i in range(self.num_layers):
+        if GCN or GAT:
+            for i in range(self.num_layers):
+                xs = []
+                for batch_size, n_id, adj in subgraph_loader:
+                    edge_index, _, size = adj.to(device)
+                    x = x_all[n_id].to(device)
+                    # x_target = x[:size[1]]
+                    # x = self.convs[i]((x, x_target), edge_index)
+                    if quant:
+                        x = quant_based_degree(x, edge_index)
+
+                    x = self.convs[i](x, edge_index)
+                    if i != self.num_layers - 1:
+                        x = F.relu(x)
+                    xs.append(x[:size[1]].cpu())
+
+                    pbar.update(batch_size)
+
+                x_all = torch.cat(xs, dim=0)
+
+            pbar.close()
+        
+        if GIN:
             xs = []
             for batch_size, n_id, adj in subgraph_loader:
                 edge_index, _, size = adj.to(device)
                 x = x_all[n_id].to(device)
-                # x_target = x[:size[1]]
-                # x = self.convs[i]((x, x_target), edge_index)
-                if quant:
-                    x = quant_based_degree(x, edge_index)
-
-                x = self.convs[i](x, edge_index)
-                if i != self.num_layers - 1:
-                    x = F.relu(x)
-                xs.append(x[:size[1]].cpu())
-
+                for conv, batch_norm in zip(self.convs, self.batch_norms):
+                    x = F.relu(batch_norm(conv(x, edge_index)))
+                # x = global_add_pool(x, batch)
+                x = F.relu(self.batch_norm1(self.lin1(x)))
+                x = F.dropout(x, p=0.5, training=self.training)
+                x = self.lin2(x)
+                xs.append(x)
                 pbar.update(batch_size)
 
             x_all = torch.cat(xs, dim=0)
-
-        pbar.close()
+            pbar.close()
 
         return x_all
 
@@ -163,9 +217,14 @@ def test(quant=False):
     results = []
     # for mask in [data.train_mask, data.val_mask, data.test_mask]:
     #     results += [int(y_pred[mask].eq(y_true[mask]).sum()) / int(mask.sum())]
-    for batch_size, n_id, adj in subgraph_loader:
-        _, _, size = adj.to(device)
-        results.append(int(y_pred[n_id[:size[1]]].eq(y_true[n_id[:size[1]]]).sum()) / batch_size)
+    if GCN or GAT:
+        for batch_size, n_id, adj in subgraph_loader:
+            _, _, size = adj.to(device)
+            results.append(int(y_pred[n_id[:size[1]]].eq(y_true[n_id[:size[1]]]).sum()) / batch_size)
+    if GIN:
+        for batch_size, n_id, adj in subgraph_loader:
+            _, _, size = adj.to(device)
+            results.append(int(y_pred[n_id].eq(y_true[n_id]).sum()) / batch_size)
 
     return sum(results)/len(results)
 
