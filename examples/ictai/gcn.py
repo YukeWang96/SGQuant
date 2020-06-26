@@ -12,6 +12,7 @@ import argparse
 
 from topo_quant import *
 
+use_typeI = True
 shuffle_masks = True
 freq = 5
 epoch_num = 200
@@ -22,24 +23,26 @@ learning_rate = 0.01
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
-    # Legacy Python that doesn't verify HTTPS certificates by default
     pass
 else:
-    # Handle target environment that doesn't support HTTPS verification
     ssl._create_default_https_context = _create_unverified_https_context
 
+###############################################################################
+if use_typeI:
+    dataset = 'Citeseer' # Cora # Citeseer # PubMed
+    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
+    dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
+else:
+    dataset = 'photo' # amazon: computers, photo
+    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
+    dataset = Amazon(path, dataset)  # amazon: computers, photo
+data = dataset[0]
+
+###############################################################################
 parser = argparse.ArgumentParser()
 parser.add_argument('--use_gdc', action='store_true',
                     help='Use GDC preprocessing.')
 args = parser.parse_args()
-
-# dataset = 'Citeseer' # Cora, Citeseer, PubMed
-dataset = 'computers' # Amazon: computers, photo
-path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset)
-# dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures())
-dataset = Amazon(path, dataset)
-data = dataset[0]
-
 if args.use_gdc:
     gdc = T.GDC(self_loop_weight=1, normalization_in='sym',
                 normalization_out='col',
@@ -47,8 +50,7 @@ if args.use_gdc:
                 sparsification_kwargs=dict(method='topk', k=128,
                                            dim=0), exact=True)
     data = gdc(data)
-
-
+###############################################################################
 class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -80,6 +82,7 @@ optimizer = torch.optim.Adam([
     dict(params=model.non_reg_params, weight_decay=0)
 ], lr=learning_rate)
 
+################################################################################
 train_mask = [0] * len(data.y)
 for i in range(int(len(data.y) * train_prec)): 
     train_mask[i] = 1
@@ -100,6 +103,7 @@ if shuffle_masks:
 train_mask = torch.BoolTensor(train_mask).cuda()
 val_mask = torch.BoolTensor(val_mask).cuda()
 test_mask = torch.BoolTensor(test_mask).cuda()
+###############################################################################
 
 def train():
     model.train()
@@ -130,25 +134,25 @@ def test(quant=False):
 
     return accs
 
+if __name__ == "__main__":
+    best_test_acc = 0
+    best_qnt_test_acc = 0
+    best_val_acc = test_acc = 0
+    for epoch in range(1, epoch_num + 1):
+        train()
+        train_acc, val_acc, tmp_test_acc = test()
+        best_test_acc = max(tmp_test_acc, best_test_acc)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            test_acc = tmp_test_acc
+        log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
+        print(log.format(epoch, train_acc, best_val_acc, test_acc))
+        
+        if epoch % freq == 0:
+            quant_train, quant_val, quant_test = test(True)
+            print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
+            best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
+        
 
-best_test_acc = 0
-best_qnt_test_acc = 0
-best_val_acc = test_acc = 0
-for epoch in range(1, epoch_num + 1):
-    train()
-    train_acc, val_acc, tmp_test_acc = test()
-    best_test_acc = max(tmp_test_acc, best_test_acc)
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        test_acc = tmp_test_acc
-    log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
-    print(log.format(epoch, train_acc, best_val_acc, test_acc))
-    
-    if epoch % freq == 0:
-        quant_train, quant_val, quant_test = test(True)
-        print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
-        best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
-    
-
-print("\n\n")
-print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))
+    print("\n\n")
+    print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))

@@ -13,6 +13,7 @@ import random
 
 from topo_quant import *
 
+use_typeI = True
 shuffle_masks = True
 epoch_num = 200
 train_prec = 0.6
@@ -23,21 +24,20 @@ learning_rate = 0.01
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
-    # Legacy Python that doesn't verify HTTPS certificates by default
     pass
 else:
-    # Handle target environment that doesn't support HTTPS verification
     ssl._create_default_https_context = _create_unverified_https_context
 
 ##############################################################################
-# dataset = 'Cora' # Cora # Citeseer # PubMed
-dataset = 'photo' # amazon: computers, photo
 
-path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset)
-
-# dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures())
-dataset = Amazon(path, dataset)
-
+if use_typeI:
+    dataset = 'Citeseer' # Cora # Citeseer # PubMed
+    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
+    dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
+else:
+    dataset = 'photo' # amazon: computers, photo
+    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
+    dataset = Amazon(path, dataset)  # amazon: computers, photo
 data = dataset[0]
 ###############################################################################
 
@@ -105,10 +105,12 @@ class Net(torch.nn.Module):
         x = self.lin2(x)
         return F.log_softmax(x, dim=-1)
 
+###############################################################################
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model, data = Net().to(device), data.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01) # others
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.05, weight_decay=5e-4) # amazon
+###############################################################################
 
 def train():
     model.train()
@@ -128,7 +130,6 @@ def test(quant=False):
     model.eval()
     logits, accs = model(quant), []
 
-    # print(train_mask)
     for mask in [train_mask, val_mask, test_mask]:
         pred = logits[mask].max(1)[1]
         tmp = torch.eq(pred, data.y[mask])
@@ -138,31 +139,26 @@ def test(quant=False):
         accs.append(acc)
     return accs
 
-# for epoch in range(1, epoch_num + 1):
-#     train()
-#     log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
-#     print(log.format(epoch, *test()))
-#     if epoch % freq == 0:
-#         print("* quant ", log.format(epoch, *test(True)))
+###############################################################################
+if __name__ == "__main__":
+    best_test_acc = 0
+    best_qnt_test_acc = 0
+    best_val_acc = test_acc = 0
+    for epoch in range(1, epoch_num + 1):
+        train()
+        train_acc, val_acc, tmp_test_acc = test()
+        best_test_acc = max(tmp_test_acc, best_test_acc)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            test_acc = tmp_test_acc
+        log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
+        print(log.format(epoch, train_acc, best_val_acc, test_acc))
+        
+        if epoch % freq == 0:
+            quant_train, quant_val, quant_test = test(True)
+            print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
+            best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
+        
 
-best_test_acc = 0
-best_qnt_test_acc = 0
-best_val_acc = test_acc = 0
-for epoch in range(1, epoch_num + 1):
-    train()
-    train_acc, val_acc, tmp_test_acc = test()
-    best_test_acc = max(tmp_test_acc, best_test_acc)
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        test_acc = tmp_test_acc
-    log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
-    print(log.format(epoch, train_acc, best_val_acc, test_acc))
-    
-    if epoch % freq == 0:
-        quant_train, quant_val, quant_test = test(True)
-        print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
-        best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
-    
-
-print("\n\n")
-print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))
+    print("\n\n")
+    print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))

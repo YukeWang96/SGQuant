@@ -10,13 +10,13 @@ from torch.nn import Sequential, Linear, ReLU, BatchNorm1d as BatchNorm
 
 from topo_quant import *
 freq = 5
-# train_prec = 0.6
-# val_prec = 0.9
 
 epo_num = 6
-GCN = False
+GCN = True
 GIN = False
-GAT = True
+GAT = False
+Cond = GCN + GIN + GAT
+assert Cond == 1
 hidden = 128
 head = 8
 
@@ -33,7 +33,7 @@ else:
                             sizes=[25, 10], batch_size=1024, shuffle=True,
                             num_workers=16)
 
-subgraph_loader = NeighborSampler(data.edge_index, node_idx=None, sizes=[-1],
+subgraph_loader = NeighborSampler(data.edge_index, node_idx=data.test_mask, sizes=[-1],
                                   batch_size=1024, shuffle=False,
                                   num_workers=16)
 
@@ -84,7 +84,7 @@ class SAGE(torch.nn.Module):
         # Target nodes are also included in the source nodes so that one can
         # easily apply skip-connections or add self-loops.
         for i, (edge_index, _, size) in enumerate(adjs):
-            
+
             # print(size)
             # x_target = x[:size[1]]  # Target nodes are always placed first.
             # x = self.convs[i]((x, x_target), edge_index)
