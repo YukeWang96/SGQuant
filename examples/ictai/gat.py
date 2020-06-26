@@ -28,12 +28,12 @@ else:
     # Handle target environment that doesn't support HTTPS verification
     ssl._create_default_https_context = _create_unverified_https_context
 
-dataset = 'Citeseer' # Cora # Citeseer # PubMed
-# dataset = 'photo' # amazon: computers, photo
+# dataset = 'Citeseer' # Cora # Citeseer # PubMed
+dataset = 'photo' # amazon: computers, photo
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
-dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
-# dataset = Amazon(path, dataset)  # amazon: computers, photo
+# dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
+dataset = Amazon(path, dataset)  # amazon: computers, photo
 
 data = dataset[0]
 
