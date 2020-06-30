@@ -3,7 +3,8 @@ import torch.nn.functional as F
 from torch_geometric.datasets import Planetoid
 from torch_geometric.datasets.amazon import Amazon
 import torch_geometric.transforms as T
-from torch_geometric.nn import GCNConv, ChebConv  # noqa
+# from torch_geometric.nn import GCNConv, ChebConv  # noqa
+from gcn_conv import GCNConv
 import ssl
 import time
 import random
@@ -12,7 +13,7 @@ import argparse
 
 from topo_quant import *
 
-use_typeI = True
+use_typeI = False
 shuffle_masks = True
 freq = 5
 epoch_num = 200
@@ -29,11 +30,11 @@ else:
 
 ###############################################################################
 if use_typeI:
-    dataset = 'Citeseer' # Cora # Citeseer # PubMed
+    dataset = 'Cora' # Cora # Citeseer # PubMed
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
 else:
-    dataset = 'photo' # amazon: computers, photo
+    dataset = 'computers' # amazon: computers, photo
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Amazon(path, dataset)  # amazon: computers, photo
 data = dataset[0]
@@ -153,6 +154,8 @@ if __name__ == "__main__":
             print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
             best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
         
-
+        if epoch == epoch_num:
+            torch.save(model.state_dict(), "model.pth")
+        
     print("\n\n")
     print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))

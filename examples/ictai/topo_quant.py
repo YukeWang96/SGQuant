@@ -28,7 +28,7 @@ def _deflatten_as(x, x_full):
     return x.view(*shape)
 
 
-def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0,  reduce_type='mean', keepdim=False, true_zero=False):
+def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='min', keepdim=False, true_zero=False):
     with torch.no_grad():
         x_flat = x.flatten(*flatten_dims)
         if x_flat.dim() == 1:
@@ -44,6 +44,7 @@ def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, 
             else:
                 min_values = min_values.min(reduce_dim, keepdim=keepdim)[0]
                 max_values = max_values.max(reduce_dim, keepdim=keepdim)[0]
+
         # TODO: re-add true zero computation
         range_values = max_values - min_values
         return QParams(range=range_values, zero_point=min_values, num_bits=num_bits)
@@ -68,16 +69,22 @@ class UniformQuantize(InplaceFunction):
             qparams = calculate_qparams(
                 input, num_bits=num_bits, flatten_dims=flatten_dims, reduce_dim=reduce_dim)
 
-        zero_point = qparams.zero_point
+        # print(output)
+        zero_point = torch.min(output) # qparams.zero_point
+        range_val = torch.max(output) - torch.min(output) 
+        # print(qparams.zero_point)
+        # print(torch.min(output))
         num_bits = qparams.num_bits
         qmin = -(2.**(num_bits - 1)) if signed else 0.
         qmax = qmin + 2.**num_bits - 1.
-        scale = qparams.range / (qmax - qmin)
+        # scale = qparams.range / (qmax - qmin)
+        scale = range_val / (qmax - qmin)
         with torch.no_grad():
             output.add_(qmin * scale - zero_point).div_(scale)
             if stochastic:
                 noise = output.new(output.shape).uniform_(-0.5, 0.5)
                 output.add_(noise)
+
             # quantize
             output.clamp_(qmin, qmax).round_()
 
@@ -99,27 +106,28 @@ def quantize(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN, redu
         x, num_bits, qparams, flatten_dims, reduce_dim, dequantize, signed, stochastic, inplace)
 
 def main():
-    torch.manual_seed(4)
-    x = torch.randn((8, 8), requires_grad=True)
-    w1 = torch.randn((8, 8), requires_grad=True)
-    z1 = F.linear(x, w1)
-    a1 = F.relu(z1)
+    pass
+    # torch.manual_seed(4)
+    # x = torch.randn((8, 8), requires_grad=True)
+    # w1 = torch.randn((8, 8), requires_grad=True)
+    # z1 = F.linear(x, w1)
+    # a1 = F.relu(z1)
     # print(a1)
     # print(id(a1))
     # print(q_a1)
 
-    w2 = torch.randn((8, 8), requires_grad=True)
-    z2 = F.linear(a1, w2)
-    a2 = F.relu(z2)
+    # w2 = torch.randn((8, 8), requires_grad=True)
+    # z2 = F.linear(a1, w2)
+    # a2 = F.relu(z2)
 
-    a1_q = quantize(a1, num_bits=8, dequantize=True)
-    w2_q = quantize(w2, num_bits=8, dequantize=True)
-    z2_q = F.linear(a1_q, w2_q)
-    a2_q = F.relu(z2_q)
+    # a1_q = quantize(a1, num_bits=8, dequantize=True)
+    # w2_q = quantize(w2, num_bits=8, dequantize=True)
+    # z2_q = F.linear(a1_q, w2_q)
+    # a2_q = F.relu(z2_q)
     
-    diff = (a2_q - a1_q)
-    loss = torch.sqrt(diff * diff)
-    print(loss)
+    # diff = (a2_q - a1_q)
+    # loss = torch.sqrt(diff * diff)
+    # print(loss)
     # a1 = a1.to(torch.uint8)
     # print(a1)
     # print(torch.randint(100, (4,4), dtype=torch.uint8))
