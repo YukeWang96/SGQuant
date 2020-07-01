@@ -139,8 +139,10 @@ if __name__ == "__main__":
             quant_train, quant_val, quant_test = test(True)
             print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
             best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
+            avg_qnt_acc.append(quant_test)
         
     print("\n\n")
     # print("**best_test_acc:\t{:.4f}".format(best_test_acc))
-    print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))
+    print("avg_quant_acc: {:.3f}".format(sum(avg_qnt_acc)/len(avg_qnt_acc)))
+    # print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))
 

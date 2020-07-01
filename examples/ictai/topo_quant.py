@@ -166,7 +166,7 @@ def truncate(degree):
         return 2
     
 
-def quant_based_degree(embedding_mat, edge_list, degree_aware = True, bit = 8, layer_num=1):
+def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=8, layer_num=1):
     if degree_aware:
         degree = defaultdict(int)
         bits_stat = 0
