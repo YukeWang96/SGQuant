@@ -13,12 +13,14 @@ import os.path as osp
 from topo_quant import *
 
 shuffle_masks = True
-use_typeI = False
+use_typeI = True
 freq = 5
-epoch_num = 200
+epoch_num = 400
 train_prec = 0.6
 val_prec = 0.9
 learning_rate = 0.005
+
+bit_list = [4, 4, 4, 4]
 
 try:
     _create_unverified_https_context = ssl._create_unverified_context
@@ -29,7 +31,7 @@ else:
 
 ###############################################################################
 if use_typeI:
-    dataset = 'Cora' # Cora # Citeseer # PubMed
+    dataset = 'Citeseer' # Cora # Citeseer # PubMed
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
 else:
@@ -71,9 +73,8 @@ class Net(torch.nn.Module):
         # self.conv1 = GATConv(dataset.num_features, 256, heads=8, dropout=0.6)
         # # On the Pubmed dataset, use heads=8 in conv2.
         # self.conv2 = GATConv(256 * 8, dataset.num_classes, heads=1, concat=True, dropout=0.6)
-
         self.lin1 = torch.nn.Linear(dataset.num_features, 16)
-        self.prop1 = AGNNConv(requires_grad=False)
+        self.prop1 = AGNNConv(requires_grad=True)
         self.prop2 = AGNNConv(requires_grad=True)
         self.lin2 = torch.nn.Linear(16, dataset.num_classes)
 
@@ -81,20 +82,24 @@ class Net(torch.nn.Module):
         x, edge_index = data.x, data.edge_index
 
         if quant:
+            # x = quantize(x, num_bits=bit_list[0], dequantize=True)
             x = quant_based_degree(x, edge_index, layer_num=1)
         x = F.dropout(x, training=self.training)
         x = F.relu(self.lin1(x))
 
         if quant:
+            # x = quantize(x, num_bits=bit_list[1], dequantize=True)
             x = quant_based_degree(x, edge_index, layer_num=1)
-        x = self.prop1(x, data.edge_index)
+        x = self.prop1(x, edge_index)
 
         if quant:
+            # x = quantize(x, num_bits=bit_list[2], dequantize=True)
             x = quant_based_degree(x, edge_index, layer_num=2)
-        x = self.prop2(x, data.edge_index)
+        x = self.prop2(x, edge_index)
         x = F.dropout(x, training=self.training)
         
         if quant:
+            # x = quantize(x, num_bits=bit_list[3], dequantize=True)
             x = quant_based_degree(x, edge_index, layer_num=2)
         x = self.lin2(x)
 
@@ -104,7 +109,6 @@ class Net(torch.nn.Module):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model, data = Net().to(device), data.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) # others
-# optimizer = torch.optim.Adam(model.parameters(), lr=0.05, weight_decay=5e-4) # amazon
 
 def train():
     model.train()
@@ -138,7 +142,7 @@ if __name__ == "__main__":
     best_test_acc = 0
     best_qnt_test_acc = 0
     best_val_acc = test_acc = 0
-    avg_qnt_acc = []
+    # avg_qnt_acc = []
     for epoch in range(1, epoch_num + 1):
         train()
         train_acc, val_acc, tmp_test_acc = test()

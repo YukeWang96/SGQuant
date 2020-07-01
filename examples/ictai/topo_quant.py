@@ -6,7 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.function import InplaceFunction, Function
 from collections import defaultdict
-
+import pickle
+import os
 # import numpy as np
 # import pandas as pd
 # import seaborn as sns
@@ -28,7 +29,7 @@ def _deflatten_as(x, x_full):
     return x.view(*shape)
 
 
-def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='min', keepdim=False, true_zero=False):
+def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='mean', keepdim=False, true_zero=False):
     with torch.no_grad():
         x_flat = x.flatten(*flatten_dims)
         if x_flat.dim() == 1:
@@ -70,8 +71,10 @@ class UniformQuantize(InplaceFunction):
                 input, num_bits=num_bits, flatten_dims=flatten_dims, reduce_dim=reduce_dim)
 
         # print(output)
-        zero_point = torch.min(output) # qparams.zero_point
-        range_val = torch.max(output) - torch.min(output) 
+        # zero_point = torch.min(output) 
+        # range_val = torch.max(output) - torch.min(output) 
+        zero_point = qparams.zero_point
+        range_val = qparams.range
         # print(qparams.zero_point)
         # print(torch.min(output))
         num_bits = qparams.num_bits
@@ -166,22 +169,26 @@ def truncate(degree):
         return 2
     
 
-def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=8, layer_num=1):
+def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=4, layer_num=1):
     if degree_aware:
-        degree = defaultdict(int)
-        bits_stat = 0
-        for src, trg in zip(edge_list[0], edge_list[1]):
-            degree[trg.item()] += 1
-        
-        if layer_num == 1:
-            standard_qbit = [1, 2, 4, 8, 16]
+        if not os.path.exists("degree.pkl"):
+            degree = defaultdict(int)
+            bits_stat = 0
+            for src, trg in zip(edge_list[0], edge_list[1]):
+                degree[trg.item()] += 1
+            pickle.dump(degree, open("degree.pkl", "wb"))
         else:
-            standard_qbit = [1, 2, 4, 8]
+            degree = pickle.load(open("degree.pkl", "rb"))
+
+        if layer_num == 1:
+            standard_qbit = [1, 2, 4, 8, 16, 32]
+        else:
+            standard_qbit = [1, 2, 4, 8, 16, 32]
         # print(min(degree.keys()), max(degree.keys()))
         # print(embedding_mat.size())
-        embedding_mat_li = embedding_mat.split(1, dim=0)
+        embedding_mat_li = torch.split(embedding_mat, 1)
         # print(len(embedding_mat_li))
-        quant_bit = []
+        bits_stat = 0
         temp_embed = []
         for key in range(len(embedding_mat)):
             if key in degree:
@@ -192,9 +199,12 @@ def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=8, layer
             else:
                 temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
                 bits_stat += standard_qbit[-1]
+            # temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
+            # temp_embed.append(embedding_mat_li[key])
+
         embedding_mat_new = torch.cat(temp_embed, 0)
         avg_bit = (bits_stat/len(embedding_mat))
-        print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
+        # print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
         return embedding_mat_new
     else:
         return quantize(embedding_mat, num_bits=bit, dequantize=True, signed=True)
