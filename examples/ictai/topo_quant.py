@@ -176,7 +176,7 @@ def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=8, layer
         if layer_num == 1:
             standard_qbit = [1, 2, 4, 8, 16]
         else:
-            standard_qbit = [1, 2]
+            standard_qbit = [1, 2, 4, 8]
         # print(min(degree.keys()), max(degree.keys()))
         # print(embedding_mat.size())
         embedding_mat_li = embedding_mat.split(1, dim=0)
@@ -193,8 +193,8 @@ def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=8, layer
                 temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
                 bits_stat += standard_qbit[-1]
         embedding_mat_new = torch.cat(temp_embed, 0)
-        # avg_bit = (bits_stat/len(embedding_mat))
-        # print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
+        avg_bit = (bits_stat/len(embedding_mat))
+        print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
         return embedding_mat_new
     else:
         return quantize(embedding_mat, num_bits=bit, dequantize=True, signed=True)

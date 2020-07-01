@@ -5,7 +5,7 @@ The creation of [our dockerfile](https://github.com/rusty1s/pytorch_geometric/bl
 
 1. Download the dockerfile to your host server.
 2. `$ docker build -t pyg docker/`
-3. `$ docker run --rm -it --init --runtime=nvidia --ipc=host --network=host --volume=$PWD:/app -e NVIDIA_VISIBLE_DEVICES=0 pyg /bin/bash`
+3. `$ docker run --rm -it --init --runtime=nvidia --gpus "all" --ipc=host --network=host --volume=$PWD:/app -e NVIDIA_VISIBLE_DEVICES=0 pyg /bin/bash`
 
 If you encounter any problems, please feel free to contact <liangshengwen@ict.ac.cn>.
 

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch_geometric.datasets import Planetoid
 from torch_geometric.datasets.amazon import Amazon
 import torch_geometric.transforms as T
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import AGNNConv
 import ssl
 import time
 import random
@@ -13,7 +13,7 @@ import os.path as osp
 from topo_quant import *
 
 shuffle_masks = True
-use_typeI = True
+use_typeI = False
 freq = 5
 epoch_num = 200
 train_prec = 0.6
@@ -33,57 +33,71 @@ if use_typeI:
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
 else:
-    dataset = 'photo' # amazon: computers, photo
+    dataset = 'computers' # amazon: computers, photo
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Amazon(path, dataset)  # amazon: computers, photo
 data = dataset[0]
 
 ###############################################################################
-# train_mask = [0] * len(data.y)
-# for i in range(int(len(data.y) * train_prec)): 
-#     train_mask[i] = 1
+train_mask = [0] * len(data.y)
+for i in range(int(len(data.y) * train_prec)): 
+    train_mask[i] = 1
 
-# val_mask = [0] * len(data.y)
-# for i in range(int(len(data.y) * train_prec), int(len(data.y) * val_prec)):
-#     val_mask[i] = 1
+val_mask = [0] * len(data.y)
+for i in range(int(len(data.y) * train_prec), int(len(data.y) * val_prec)):
+    val_mask[i] = 1
 
-# test_mask = [0] * len(data.y)
-# for i in range(int(len(data.y) * val_prec), int(len(data.y) * 1.0)):
-#     test_mask[i] = 1
+test_mask = [0] * len(data.y)
+for i in range(int(len(data.y) * val_prec), int(len(data.y) * 1.0)):
+    test_mask[i] = 1
 
 # if shuffle_masks:
 #     random.shuffle(train_mask)
 #     random.shuffle(val_mask)
 #     random.shuffle(test_mask)
 
-# train_mask = torch.BoolTensor(train_mask).cuda()
-# val_mask = torch.BoolTensor(val_mask).cuda()
-# test_mask = torch.BoolTensor(test_mask).cuda()
+train_mask = torch.BoolTensor(train_mask).cuda()
+val_mask = torch.BoolTensor(val_mask).cuda()
+test_mask = torch.BoolTensor(test_mask).cuda()
 
-train_mask = torch.BoolTensor(data.train_mask).cuda()
-val_mask = torch.BoolTensor(data.val_mask).cuda()
-test_mask = torch.BoolTensor(data.test_mask).cuda()
+# train_mask = torch.BoolTensor(data.train_mask).cuda()
+# val_mask = torch.BoolTensor(data.val_mask).cuda()
+# test_mask = torch.BoolTensor(data.test_mask).cuda()
 
 ################# Define Network.
 class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = GATConv(dataset.num_features, 256, heads=8, dropout=0.6)
-        # On the Pubmed dataset, use heads=8 in conv2.
-        self.conv2 = GATConv(256 * 8, dataset.num_classes, heads=1, concat=True,
-                             dropout=0.6)
+        # self.conv1 = GATConv(dataset.num_features, 256, heads=8, dropout=0.6)
+        # # On the Pubmed dataset, use heads=8 in conv2.
+        # self.conv2 = GATConv(256 * 8, dataset.num_classes, heads=1, concat=True, dropout=0.6)
+
+        self.lin1 = torch.nn.Linear(dataset.num_features, 16)
+        self.prop1 = AGNNConv(requires_grad=False)
+        self.prop2 = AGNNConv(requires_grad=True)
+        self.lin2 = torch.nn.Linear(16, dataset.num_classes)
 
     def forward(self, quant=False):
         x, edge_index = data.x, data.edge_index
+
         if quant:
             x = quant_based_degree(x, edge_index, layer_num=1)
-        x = F.dropout(x, p=0.6, training=self.training)
-        x = F.elu(self.conv1(x, edge_index))
+        x = F.dropout(x, training=self.training)
+        x = F.relu(self.lin1(x))
+
+        if quant:
+            x = quant_based_degree(x, edge_index, layer_num=1)
+        x = self.prop1(x, data.edge_index)
+
+        if quant:
+            x = quant_based_degree(x, edge_index, layer_num=2)
+        x = self.prop2(x, data.edge_index)
+        x = F.dropout(x, training=self.training)
         
         if quant:
             x = quant_based_degree(x, edge_index, layer_num=2)
-        x = F.dropout(x, p=0.6, training=self.training)
-        x = self.conv2(x, edge_index)
+        x = self.lin2(x)
+
         return F.log_softmax(x, dim=1)
 
 

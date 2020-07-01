@@ -17,7 +17,7 @@ GIN = False
 GAT = False
 Cond = GCN + GIN + GAT
 assert Cond == 1
-hidden = 128
+hidden = 32
 head = 8
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '../../', 'data', 'Reddit')
@@ -28,7 +28,7 @@ if GIN:
     train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
                                 sizes=[10, 10, 10, 10, 10], batch_size=64, shuffle=True,
                                 num_workers=16)
-else:
+if GCN or GIN:
     train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
                             sizes=[25, 10], batch_size=1024, shuffle=True,
                             num_workers=16)
@@ -118,7 +118,8 @@ class SAGE(torch.nn.Module):
         return x.log_softmax(dim=-1)
 
     def inference(self, x_all, quant=False):
-        pbar = tqdm(total=x_all.size(0) * self.num_layers)
+        # pbar = tqdm(total=x_all.size(0) * self.num_layers)
+        pbar = tqdm(total= len(subgraph_loader) * self.num_layers)
         pbar.set_description('Evaluating')
         xs = []
 
@@ -148,16 +149,18 @@ class SAGE(torch.nn.Module):
                 x = x_all[n_id].to(device)
                 # x_target = x[:size[1]]
                 # x = self.convs[i]((x, x_target), edge_index)
-                if quant:
-                    x = quant_based_degree(x, edge_index)
+                
 
                 for i in range(self.num_layers):
+                    if quant:
+                        x = quant_based_degree(x, edge_index, layer_num=i+1)
+
                     x = self.convs[i](x, edge_index)
                     if i != self.num_layers - 1:
                         x = F.relu(x)
 
                 xs.append(x.cpu())
-                pbar.update(batch_size * self.num_layers)    
+                pbar.update(self.num_layers)    
             
             # x_all = torch.cat(xs, dim=0)
             pbar.close()
