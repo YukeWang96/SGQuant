@@ -17,7 +17,7 @@ with open("feature_map.pkl", "rb") as fread:
     plt.savefig('feature_map.pdf')
     plt.clf()
 
-    feat_map_quant = quantize(feat_map, num_bits=8, dequantize=True).numpy().flatten()
+    feat_map_quant = quantize(feat_map, num_bits=8, dequantize=True, signed=True).numpy().flatten()
     # weights = np.ones_like(feat_map_quant)/float(len(feat_map_quant))
     hist, bins, _ = plt.hist(feat_map_quant, 256, range=[-2, 2], density=True, color="#d35400")
     # plt.show()

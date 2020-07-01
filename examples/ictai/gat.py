@@ -13,7 +13,6 @@ import os.path as osp
 from topo_quant import *
 
 shuffle_masks = True
-
 use_typeI = True
 freq = 5
 epoch_num = 200
@@ -30,7 +29,7 @@ else:
 
 ###############################################################################
 if use_typeI:
-    dataset = 'Citeseer' # Cora # Citeseer # PubMed
+    dataset = 'Cora' # Cora # Citeseer # PubMed
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
 else:
@@ -40,42 +39,49 @@ else:
 data = dataset[0]
 
 ###############################################################################
-train_mask = [0] * len(data.y)
-for i in range(int(len(data.y) * train_prec)): 
-    train_mask[i] = 1
+# train_mask = [0] * len(data.y)
+# for i in range(int(len(data.y) * train_prec)): 
+#     train_mask[i] = 1
 
-val_mask = [0] * len(data.y)
-for i in range(int(len(data.y) * train_prec), int(len(data.y) * val_prec)):
-    val_mask[i] = 1
+# val_mask = [0] * len(data.y)
+# for i in range(int(len(data.y) * train_prec), int(len(data.y) * val_prec)):
+#     val_mask[i] = 1
 
-test_mask = [0] * len(data.y)
-for i in range(int(len(data.y) * val_prec), int(len(data.y) * 1.0)):
-    test_mask[i] = 1
+# test_mask = [0] * len(data.y)
+# for i in range(int(len(data.y) * val_prec), int(len(data.y) * 1.0)):
+#     test_mask[i] = 1
 
-if shuffle_masks:
-    random.shuffle(train_mask)
-    random.shuffle(val_mask)
-    random.shuffle(test_mask)
+# if shuffle_masks:
+#     random.shuffle(train_mask)
+#     random.shuffle(val_mask)
+#     random.shuffle(test_mask)
 
-train_mask = torch.BoolTensor(train_mask).cuda()
-val_mask = torch.BoolTensor(val_mask).cuda()
-test_mask = torch.BoolTensor(test_mask).cuda()
+# train_mask = torch.BoolTensor(train_mask).cuda()
+# val_mask = torch.BoolTensor(val_mask).cuda()
+# test_mask = torch.BoolTensor(test_mask).cuda()
+
+train_mask = torch.BoolTensor(data.train_mask).cuda()
+val_mask = torch.BoolTensor(data.val_mask).cuda()
+test_mask = torch.BoolTensor(data.test_mask).cuda()
 
 ################# Define Network.
 class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = GATConv(dataset.num_features, 8, heads=8, dropout=0.6)
+        self.conv1 = GATConv(dataset.num_features, 256, heads=8, dropout=0.6)
         # On the Pubmed dataset, use heads=8 in conv2.
-        self.conv2 = GATConv(8 * 8, dataset.num_classes, heads=1, concat=True,
+        self.conv2 = GATConv(256 * 8, dataset.num_classes, heads=1, concat=True,
                              dropout=0.6)
 
     def forward(self, quant=False):
         x, edge_index = data.x, data.edge_index
         if quant:
-            x = quant_based_degree(x, edge_index)
+            x = quant_based_degree(x, edge_index, layer_num=1)
         x = F.dropout(x, p=0.6, training=self.training)
         x = F.elu(self.conv1(x, edge_index))
+        
+        if quant:
+            x = quant_based_degree(x, edge_index, layer_num=2)
         x = F.dropout(x, p=0.6, training=self.training)
         x = self.conv2(x, edge_index)
         return F.log_softmax(x, dim=1)
@@ -118,6 +124,7 @@ if __name__ == "__main__":
     best_test_acc = 0
     best_qnt_test_acc = 0
     best_val_acc = test_acc = 0
+    avg_qnt_acc = []
     for epoch in range(1, epoch_num + 1):
         train()
         train_acc, val_acc, tmp_test_acc = test()
@@ -128,12 +135,12 @@ if __name__ == "__main__":
         log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
         print(log.format(epoch, train_acc, best_val_acc, test_acc))
         
-        if epoch % freq == 0:
+        if epoch % freq == 0 and epoch > 10:
             quant_train, quant_val, quant_test = test(True)
             print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
             best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
         
-
     print("\n\n")
+    # print("**best_test_acc:\t{:.4f}".format(best_test_acc))
     print("**best_test_acc:\t{:.4f}\n**best_qnt_test_acc:\t{:.4f}".format(best_test_acc, best_qnt_test_acc))
 

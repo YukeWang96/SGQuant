@@ -156,16 +156,27 @@ def degree_statistics(input_list):
     print("25% : {},\n50% : {},\n75% : {},\n100%: {} ".format(idx_25, idx_50, idx_75, idx_100))
     return idx_25, idx_50, idx_75, idx_100
 
+def truncate(degree):
+    assert degree >= 0
+    if degree <= 1: 
+        return 32
+    if degree <= 1024:
+        return max(2, 32/math.sqrt(degree))
+    if degree > 1024: 
+        return 2
+    
 
-def quant_based_degree(embedding_mat, edge_list):
-    degree_aware = False
-    bit = 2
+def quant_based_degree(embedding_mat, edge_list, degree_aware = True, bit = 8, layer_num=1):
     if degree_aware:
         degree = defaultdict(int)
+        bits_stat = 0
         for src, trg in zip(edge_list[0], edge_list[1]):
             degree[trg.item()] += 1
         
-        standard_qbit = [1,2,4,8,16,32]
+        if layer_num == 1:
+            standard_qbit = [1, 2, 4, 8, 16]
+        else:
+            standard_qbit = [1, 2]
         # print(min(degree.keys()), max(degree.keys()))
         # print(embedding_mat.size())
         embedding_mat_li = embedding_mat.split(1, dim=0)
@@ -174,14 +185,19 @@ def quant_based_degree(embedding_mat, edge_list):
         temp_embed = []
         for key in range(len(embedding_mat)):
             if key in degree:
-                idx = bisect.bisect_left(standard_qbit, 32/math.sqrt(degree[key]))
+                idx = bisect.bisect_left(standard_qbit, truncate(degree[key]))
+                if idx > len(standard_qbit) - 1: idx = idx - 1
                 temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[max(idx, 0)], dequantize=True))
+                bits_stat += standard_qbit[max(idx, 0)]
             else:
                 temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
+                bits_stat += standard_qbit[-1]
         embedding_mat_new = torch.cat(temp_embed, 0)
+        # avg_bit = (bits_stat/len(embedding_mat))
+        # print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
         return embedding_mat_new
     else:
-        return quantize(embedding_mat, num_bits=bit, dequantize=True)
+        return quantize(embedding_mat, num_bits=bit, dequantize=True, signed=True)
 
     # for key in degree.keys():
     #     print(key, ": ", degree[key])
