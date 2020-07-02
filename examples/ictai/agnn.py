@@ -13,14 +13,14 @@ import os.path as osp
 from topo_quant import *
 
 shuffle_masks = True
-use_typeI = True
+use_typeI = False
 freq = 5
 epoch_num = 400
 train_prec = 0.6
 val_prec = 0.9
 learning_rate = 0.005
 
-bit_list = [4, 4, 4, 4]
+bit_list = [4, 4, 2, 2]
 
 try:
     _create_unverified_https_context = ssl._create_unverified_context
@@ -31,7 +31,7 @@ else:
 
 ###############################################################################
 if use_typeI:
-    dataset = 'Citeseer' # Cora # Citeseer # PubMed
+    dataset = 'Cora' # Cora # Citeseer # PubMed
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', dataset) 
     dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures()) # Cora # Citeseer # PubMed
 else:
@@ -74,7 +74,7 @@ class Net(torch.nn.Module):
         # # On the Pubmed dataset, use heads=8 in conv2.
         # self.conv2 = GATConv(256 * 8, dataset.num_classes, heads=1, concat=True, dropout=0.6)
         self.lin1 = torch.nn.Linear(dataset.num_features, 16)
-        self.prop1 = AGNNConv(requires_grad=True)
+        self.prop1 = AGNNConv(requires_grad=False)
         self.prop2 = AGNNConv(requires_grad=True)
         self.lin2 = torch.nn.Linear(16, dataset.num_classes)
 
@@ -82,25 +82,26 @@ class Net(torch.nn.Module):
         x, edge_index = data.x, data.edge_index
 
         if quant:
-            # x = quantize(x, num_bits=bit_list[0], dequantize=True)
-            x = quant_based_degree(x, edge_index, layer_num=1)
+            x = quantize(x, num_bits=bit_list[0], dequantize=True)
+            # x = quant_based_degree(x, edge_index, layer_num=1)
         x = F.dropout(x, training=self.training)
         x = F.relu(self.lin1(x))
 
         if quant:
-            # x = quantize(x, num_bits=bit_list[1], dequantize=True)
-            x = quant_based_degree(x, edge_index, layer_num=1)
+            x = quantize(x, num_bits=bit_list[1], dequantize=True)
+            # x = quant_based_degree(x, edge_index, layer_num=1)
         x = self.prop1(x, edge_index)
 
         if quant:
-            # x = quantize(x, num_bits=bit_list[2], dequantize=True)
-            x = quant_based_degree(x, edge_index, layer_num=2)
+            x = quantize(x, num_bits=bit_list[2], dequantize=True)
+            # x = quant_based_degree(x, edge_index, layer_num=2)
         x = self.prop2(x, edge_index)
+
         x = F.dropout(x, training=self.training)
-        
         if quant:
-            # x = quantize(x, num_bits=bit_list[3], dequantize=True)
-            x = quant_based_degree(x, edge_index, layer_num=2)
+            x = quantize(x, num_bits=bit_list[3], dequantize=True)
+            # x = quant_based_degree(x, edge_index, layer_num=2)
+        
         x = self.lin2(x)
 
         return F.log_softmax(x, dim=1)
@@ -153,7 +154,7 @@ if __name__ == "__main__":
         log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
         print(log.format(epoch, train_acc, best_val_acc, test_acc))
         
-        if epoch % freq == 0 and epoch > 10:
+        if epoch % freq == 0: # and epoch > 10:
             quant_train, quant_val, quant_test = test(True)
             print("==> quant ", log.format(epoch, quant_train, quant_val, quant_test))
             best_qnt_test_acc = max(best_qnt_test_acc, quant_test)
