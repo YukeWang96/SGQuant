@@ -10,16 +10,16 @@ from torch.nn import Sequential, Linear, ReLU, BatchNorm1d as BatchNorm
 
 from topo_quant import *
 
-freq = 5
+freq = 20
 epo_num = 6
 GCN = True
 GIN = False
 GAT = False
 Cond = GCN + GIN + GAT
 assert Cond == 1
-hidden = 16
+hidden = 256
 head = 8
-bit_list = [32,32,32,32]
+bit_list = [4,4,4,4]
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '../../', 'data', 'Reddit')
 dataset = Reddit(path)
@@ -29,7 +29,7 @@ if GIN:
     train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
                                 sizes=[10, 10, 10, 10, 10], batch_size=64, shuffle=True,
                                 num_workers=16)
-if GCN or GIN:
+if GCN or GIN or GAT:
     train_loader = NeighborSampler(data.edge_index, node_idx=data.train_mask,
                             sizes=[25, 10], batch_size=1024, shuffle=True,
                             num_workers=16)
@@ -51,12 +51,13 @@ class SAGE(torch.nn.Module):
             # self.convs.append(GCNConv(in_channels, hidden_channels, normalize=True))
             # self.convs.append(GCNConv(hidden_channels, out_channels, normalize=True))
             
-            self.lin1 = torch.nn.Linear(dataset.num_features, 16)
-            # self.prop1 = AGNNConv(requires_grad=False)
+            self.lin1 = torch.nn.Linear(dataset.num_features, hidden)
             self.convs.append(AGNNConv(requires_grad=False))
-            # self.prop2 = AGNNConv(requires_grad=True)
             self.convs.append(AGNNConv(requires_grad=True))
-            self.lin2 = torch.nn.Linear(16, dataset.num_classes)
+            self.lin2 = torch.nn.Linear(hidden, dataset.num_classes)
+
+            # self.prop1 = AGNNConv(requires_grad=False)
+            # self.prop2 = AGNNConv(requires_grad=True)
 
         if GIN:
             self.num_layers = 5
@@ -92,9 +93,10 @@ class SAGE(torch.nn.Module):
         # Target nodes are also included in the source nodes so that one can
         # easily apply skip-connections or add self-loops.
 
-        x = quantize(x, num_bits=bit_list[0], dequantize=True)
-        x = F.dropout(x, training=self.training)
-        x = F.relu(self.lin1(x))
+        if GCN:
+            # x = quantize(x, num_bits=bit_list[0], dequantize=True)
+            x = F.dropout(x, training=self.training)
+            x = F.relu(self.lin1(x))
 
         for i, (edge_index, _, size) in enumerate(adjs):
 
@@ -110,8 +112,10 @@ class SAGE(torch.nn.Module):
                 # x = self.prop1(x, data.edge_index)
                 # x = quantize(x, num_bits=bit_list[2], dequantize=True)
                 # x = self.prop2(x, data.edge_index)
-                x = quantize(x, num_bits=bit_list[i+1], dequantize=True)
+
+                # x = quantize(x, num_bits=bit_list[i+1], dequantize=True)
                 x = self.convs[i](x, edge_index)
+                
                 # print("x_target.size(): ", x_target.size())
                 # print("x.size(): ", x.size())
                 # print(edge_index)
@@ -130,13 +134,13 @@ class SAGE(torch.nn.Module):
         
         if GCN:
             x = F.dropout(x, training=self.training)
-            x = quantize(x, num_bits=bit_list[3], dequantize=True)
+            # x = quantize(x, num_bits=bit_list[3], dequantize=True)
             x = self.lin2(x)
 
-        if GAT:
-            x = F.dropout(x, training=self.training)
-            x = quantize(x, num_bits=bit_list[3], dequantize=True)
-            x = self.lin2(x)
+        # if GAT:
+        #     x = F.dropout(x, training=self.training)
+        #     x = quantize(x, num_bits=bit_list[3], dequantize=True)
+        #     x = self.lin2(x)
 
         if GIN:
             # x = global_add_pool(x, batch)
@@ -146,12 +150,20 @@ class SAGE(torch.nn.Module):
 
         return x.log_softmax(dim=-1)
 
-    def inference(self, x_all, quant=False):
+    def inference(self, x_all, quant=False, y_true=None):
         # pbar = tqdm(total=x_all.size(0) * self.num_layers)
         pbar = tqdm(total= len(subgraph_loader) * self.num_layers)
         pbar.set_description('Evaluating')
-        xs = []
-        
+        # xs = []
+        # nid_list = []
+        results = []
+
+        if GCN:
+            if quant:
+                x_all = quantize(x_all, num_bits=bit_list[0], dequantize=True)
+            x_all = F.dropout(x_all, training=self.training)
+            x_all = F.relu(self.lin1(x_all))
+
         # Compute representations of nodes layer by layer, using *all*
         # available edges. This leads to faster computation in contrast to
         # immediately computing the final representations of each batch.
@@ -177,22 +189,40 @@ class SAGE(torch.nn.Module):
                 x = x_all[n_id].to(device)
                 # x_target = x[:size[1]]
                 # x = self.convs[i]((x, x_target), edge_index)
-                
-
                 for i in range(self.num_layers):
                     if quant:
-                        x = quant_based_degree(x, edge_index, layer_num=i+1)
-
+                        x = quantize(x, num_bits=bit_list[i+1], dequantize=True)
+                        # x = quant_based_degree(x, edge_index, layer_num=i+1)
                     x = self.convs[i](x, edge_index)
-                    if i != self.num_layers - 1:
-                        x = F.relu(x)
+                    if GAT:
+                        if i != self.num_layers - 1:
+                            x = F.relu(x)
+                if GCN:
+                    x = F.dropout(x, training=self.training)
+                    if quant:
+                        x = quantize(x, num_bits=bit_list[3], dequantize=True)
+                    x = self.lin2(x)
 
-                xs.append(x.cpu())
+                    out = x.log_softmax(dim=-1)
+                    y_pred = out.argmax(dim=-1, keepdim=True).cpu()
+                    # print(y_pred.size())
+                    # print(y_true[n_id].size())
+                    results.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
+                    # y_pred = y_pred.type(torch.uint8)
+                    # tmp = y_true[n_id].type(torch.uint8)
+
+                    # acc = y_pred.eq(tmp)
+                    # acc = acc.sum()/len(n_id)
+                    # acc = y_pred.eq(tmp).sum() / len(n_id)
+                    # results.append(out)
+
+                # xs.append(x.cpu())
+                # nid_list.append(n_id)                
                 pbar.update(self.num_layers)    
-            
+    
             # x_all = torch.cat(xs, dim=0)
             pbar.close()
-        
+    
         if GIN:
             for batch_size, n_id, adj in subgraph_loader:
                 edge_index, _, size = adj.to(device)
@@ -210,13 +240,13 @@ class SAGE(torch.nn.Module):
             pbar.close()
 
         # return x_all
-        return xs
+        return sum(results)/len(results) # xs, nid_list
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = SAGE(dataset.num_features, hidden, dataset.num_classes)
 model = model.to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-4)
 
 x = data.x.to(device)
 y = data.y.squeeze().to(device)
@@ -261,21 +291,16 @@ def train(epoch):
 @torch.no_grad()
 def test(quant=False):
     model.eval()
-
-    out_list = model.inference(x, quant=quant)
+    # acc_li = []
     y_true = y.cpu().unsqueeze(-1)
-    # y_pred = out.argmax(dim=-1, keepdim=True)
+    results = model.inference(x, quant=quant, y_true=y_true)
 
-    results = []
-    # for mask in [data.train_mask, data.val_mask, data.test_mask]:
-    #     results += [int(y_pred[mask].eq(y_true[mask]).sum()) / int(mask.sum())]
-    if GCN or GAT:
-        begin = 0
-        for batch_size, n_id, adj in subgraph_loader:
-            out = out_list.pop(0)
-            y_pred = out.argmax(dim=-1, keepdim=True)
-            _, _, size = adj.to(device)
-            results.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
+    # if GCN or GAT:
+    #     for (_, n_id, _), out in zip(subgraph_loader, results):
+    #         y_pred = out.argmax(dim=-1, keepdim=True).cpu()
+    #         # print(y_pred.size())
+    #         # print(y_true[n_id].size())
+    #         acc_li.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
     if GIN:
         for batch_size, n_id, adj in subgraph_loader:
             out = out_list.pop(0)
@@ -283,7 +308,7 @@ def test(quant=False):
             _, _, size = adj.to(device)
             results.append(float(y_pred.eq(y_true[n_id]).sum()) / len(n_id))
 
-    return sum(results)/len(results)
+    return results # sum(acc_li)/len(acc_li)
 
 
 for epoch in range(1, epo_num + 1):
