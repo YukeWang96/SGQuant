@@ -4,6 +4,8 @@ from torch_geometric.datasets import Planetoid
 from torch_geometric.datasets.amazon import Amazon
 import torch_geometric.transforms as T
 from torch_geometric.nn import AGNNConv
+from agnn_conv import AGNNConv_quant
+
 import ssl
 import time
 import random
@@ -18,7 +20,7 @@ freq = 5
 epoch_num = 400
 train_prec = 0.6
 val_prec = 0.9
-learning_rate = 0.005 # 0.01
+learning_rate = 0.005
 
 try:
     _create_unverified_https_context = ssl._create_unverified_context
@@ -69,6 +71,8 @@ class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.lin1 = torch.nn.Linear(dataset.num_features, 16)
+        self.prop1_quant = AGNNConv_quant(requires_grad=False, num=1)
+        self.prop2_quant = AGNNConv_quant(requires_grad=True, num=2)
         self.prop1 = AGNNConv(requires_grad=False)
         self.prop2 = AGNNConv(requires_grad=True)
         self.lin2 = torch.nn.Linear(16, dataset.num_classes)
@@ -79,16 +83,16 @@ class Net(torch.nn.Module):
             x = quantize(x, num_bits=bit_list[0], dequantize=True)
         x = F.dropout(x, training=self.training)
         x = F.relu(self.lin1(x))
-        
+        # x = quantize(x, num_bits=bit_list[1], dequantize=True)
         if quant:
-            x = quantize(x, num_bits=bit_list[1], dequantize=True)
-        x = self.prop1(x, data.edge_index)
-        
-        if quant:
-            x = quantize(x, num_bits=bit_list[2], dequantize=True)
-        x = self.prop2(x, data.edge_index)
+            x = self.prop1_quant(x, data.edge_index)
+            x = self.prop2_quant(x, data.edge_index)
+        else:
+            x = self.prop1(x, data.edge_index)
+            x = self.prop2(x, data.edge_index)
+        # x = quantize(x, num_bits=bit_list[2], dequantize=True)
         x = F.dropout(x, training=self.training)
-        
+
         if quant:
             x = quantize(x, num_bits=bit_list[3], dequantize=True)
         x = self.lin2(x)

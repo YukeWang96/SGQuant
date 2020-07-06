@@ -8,6 +8,7 @@ from torch.autograd.function import InplaceFunction, Function
 from collections import defaultdict
 import pickle
 import os
+import sys
 # import numpy as np
 # import pandas as pd
 # import seaborn as sns
@@ -181,13 +182,11 @@ def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=4, layer
             degree = pickle.load(open("degree.pkl", "rb"))
 
         if layer_num == 1:
-            standard_qbit = [1, 2, 4, 8, 16, 32]
+            standard_qbit = [16]
         else:
-            standard_qbit = [1, 2, 4, 8, 16, 32]
-        # print(min(degree.keys()), max(degree.keys()))
-        # print(embedding_mat.size())
+            standard_qbit = [16]
+
         embedding_mat_li = torch.split(embedding_mat, 1)
-        # print(len(embedding_mat_li))
         bits_stat = 0
         temp_embed = []
         for key in range(len(embedding_mat)):
@@ -199,10 +198,24 @@ def quant_based_degree(embedding_mat, edge_list, degree_aware=True, bit=4, layer
             else:
                 temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
                 bits_stat += standard_qbit[-1]
-            # temp_embed.append(quantize(embedding_mat_li[key], num_bits=standard_qbit[-1], dequantize=True))
+
+            # tmp = embedding_mat_li[key]
+            # print(embedding_mat_li[key])
+            # orig = embedding_mat_li[key]
+            # quant_tmp = quantize(embedding_mat_li[key], num_bits=1, dequantize=True, signed=True)
+            # temp_embed.append(quant_tmp)
             # temp_embed.append(embedding_mat_li[key])
 
         embedding_mat_new = torch.cat(temp_embed, 0)
+        # print(embedding_mat.size())
+        # print(embedding_mat_new.size())
+        # print(embedding_mat)
+        # print(embedding_mat_new)
+        # sys.exit(0)
+        # print(embedding_mat_new - embedding_mat)
+        # error = (embedding_mat_new - embedding_mat).flatten().sum().cpu().data
+        # print(error)
+
         avg_bit = (bits_stat/len(embedding_mat))
         # print("layer-{}, avg_bit: {:.3f}".format(layer_num, avg_bit))
         return embedding_mat_new

@@ -11,7 +11,7 @@ from torch.nn import Sequential, Linear, ReLU, BatchNorm1d as BatchNorm
 from topo_quant import *
 
 freq = 20
-epo_num = 6
+epo_num = 20
 GCN = True
 GIN = False
 GAT = False

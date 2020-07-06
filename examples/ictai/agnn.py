@@ -20,7 +20,7 @@ train_prec = 0.6
 val_prec = 0.9
 learning_rate = 0.005
 
-bit_list = [4, 4, 2, 2]
+bit_list = [32] * 4 # [4, 4, 2, 2]
 
 try:
     _create_unverified_https_context = ssl._create_unverified_context
